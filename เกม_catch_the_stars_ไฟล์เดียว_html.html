@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Catch the Stars — เกมจับดาว (เว็บ)</title>
+  <style>
+    :root{
+      --bg:#0b1220; --panel:#0f1724; --accent:#ffd166; --muted:#90a0b3;
+      --danger:#ff6b6b; --glass: rgba(255,255,255,0.04);
+    }
+    html,body{height:100%;margin:0;font-family:Inter, system-ui, sans-serif;background:linear-gradient(180deg,var(--bg), #08101a);color:#e6eef8}
+    .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:28px;box-sizing:border-box}
+    .card{width:900px;max-width:100%;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:14px;padding:18px;box-shadow:0 8px 30px rgba(2,6,23,0.6);display:grid;grid-template-columns:1fr 340px;gap:16px}
+    canvas{background:linear-gradient(180deg, rgba(10,16,28,0.5), rgba(2,6,12,0.7));border-radius:10px;display:block;width:100%;height:620px}
+    .sidebar{padding:12px;background:var(--panel);border-radius:10px;color:var(--muted)}
+    h1{margin:0 0 6px 0;font-size:18px}
+    .meta{font-size:13px;color:var(--muted);margin-bottom:14px}
+    button{background:var(--accent);border:none;color:#061523;padding:10px 12px;border-radius:8px;font-weight:600;cursor:pointer}
+    .small{font-size:13px}
+    .row{display:flex;gap:8px;align-items:center}
+    .stats{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+    .stat{display:flex;justify-content:space-between;background:var(--glass);padding:10px;border-radius:8px}
+    .controls{margin-top:12px}
+    .hint{font-size:13px;color:var(--muted);margin-top:8px}
+    .footer{font-size:12px;color:var(--muted);margin-top:12px}
+    @media(max-width:880px){.card{grid-template-columns:1fr;}.sidebar{order:2}canvas{height:480px}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div>
+        <canvas id="game"></canvas>
+      </div>
+      <aside class="sidebar">
+        <h1>Catch the Stars</h1>
+        <div class="meta">จับดาวให้ได้มากที่สุด — หลีกเลี่ยงระเบิด ถ้าถูกระเบิดจะเสียชีวิต</div>
+        <div class="row">
+          <button id="startBtn">เริ่มเกม</button>
+          <button id="pauseBtn">พัก/เล่นต่อ</button>
+          <button id="resetBtn">รีเซ็ต</button>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><span>คะแนน</span><strong id="score">0</strong></div>
+          <div class="stat"><span>ชีวิต</span><strong id="lives">3</strong></div>
+          <div class="stat"><span>เลเวล</span><strong id="level">1</strong></div>
+        </div>
+
+        <div class="controls">
+          <div class="small"><strong>การควบคุม</strong></div>
+          <div class="hint">ลูกศรซ้าย/ขวา หรือ ปัด/ลากเมาส์ เพื่อเลื่อนตะกร้า</div>
+          <div class="hint">กด <code>Space</code> เพื่อขว้างดาวที่เก็บได้ (โบนัส)</div>
+        </div>
+
+        <div class="footer">ไฟล์เดียว (HTML/CSS/JS) — แก้ไขได้ตามต้องการ</div>
+      </aside>
+    </div>
+  </div>
+
+<script>
+// --- การตั้งค่าพื้นฐาน ---
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W = 800, H = 620;
+function resize(){
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.max(360, rect.width * devicePixelRatio);
+  canvas.height = Math.max(240, rect.height * devicePixelRatio);
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- เกมสเตต ---
+let state = 'menu'; // menu / running / paused / over
+let score = 0, lives = 3, level = 1;
+let player, items = [], bullets = [], spawnTimer = 0, spawnRate = 90;
+
+function resetGame(){
+  score = 0; lives = 3; level = 1;
+  items = []; bullets = []; spawnTimer = 0; spawnRate = 90;
+  player = {x: (canvas.width/devicePixelRatio)/2, y: (canvas.height/devicePixelRatio)-60, w:120, h:28, speed:8, carry:0};
+}
+resetGame();
+
+// --- ยูทิลิตี้ ---
+function rand(min,max){return Math.random()*(max-min)+min}
+function rectColl(a,b){return !(a.x+a.w < b.x || a.x > b.x+b.w || a.y+a.h < b.y || a.y > b.y+b.h)}
+
+// --- สปอนของตก ---
+function spawnItem(){
+  const type = Math.random() < 0.12 ? 'bomb' : 'star';
+  const size = type==='bomb'? 34 : 28;
+  items.push({x: rand(20, (canvas.width/devicePixelRatio)-20-size), y:-size, vy: rand(1.6,3.3)+level*0.12, type, w:size, h:size});
+}
+
+// --- วาด ---
+function draw(){
+  const cw = canvas.width/devicePixelRatio, ch = canvas.height/devicePixelRatio;
+  // พื้นหลัง
+  ctx.clearRect(0,0,cw,ch);
+  // กริดเล็กๆ
+  for(let i=0;i<20;i++){
+    ctx.fillStyle = 'rgba(255,255,255,0.02)';
+    ctx.fillRect(i*40%cw,0,1,ch);
+  }
+
+  // วาดผู้เล่น (ตะกร้า)
+  ctx.fillStyle = '#dbeafe';
+  ctx.fillRect(player.x, player.y, player.w, player.h);
+  // ขอบ
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.strokeRect(player.x,player.y,player.w,player.h);
+
+  // วาดไอเท็ม
+  items.forEach(it=>{
+    if(it.type==='star'){
+      drawStar(it.x+it.w/2, it.y+it.h/2, 5, it.w/2, it.w/5);
+    } else {
+      // bomb - วงกลม
+      ctx.beginPath(); ctx.fillStyle = '#ff9191'; ctx.arc(it.x+it.w/2, it.y+it.h/2, it.w/2, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle='rgba(0,0,0,0.2)'; ctx.fillRect(it.x+it.w*0.15, it.y-8, it.w*0.7, 4);
+    }
+  });
+
+  // วาดกระสุน
+  bullets.forEach(b=>{ctx.fillStyle='#ffd166'; ctx.fillRect(b.x,b.y,b.w,b.h)});
+
+  // HUD (มุมบน)
+  ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(12,12,170,56);
+  ctx.fillStyle='#fff'; ctx.font='16px system-ui'; ctx.fillText('คะแนน: '+score,22,34); ctx.fillText('ชีวิต: '+lives,22,54);
+
+  if(state==='menu'){
+    ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(cw/2-180,ch/2-60,360,120);
+    ctx.fillStyle='#fff'; ctx.font='22px system-ui'; ctx.fillText('กด เริ่มเกม เพื่อเริ่ม', cw/2-120, ch/2);
+  }
+  if(state==='over'){
+    ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(cw/2-220,ch/2-90,440,180);
+    ctx.fillStyle='#ffd166'; ctx.font='28px system-ui'; ctx.fillText('Game Over', cw/2-75,ch/2-10);
+    ctx.fillStyle='#fff'; ctx.font='18px system-ui'; ctx.fillText('คะแนนสุดท้าย: '+score, cw/2-85, ch/2+30);
+  }
+}
+
+function drawStar(cx,cy, spikes, outerRadius, innerRadius){
+  let rot = Math.PI/2*3; let x = cx; let y = cy; let step = Math.PI / spikes;
+  ctx.beginPath(); ctx.moveTo(cx, cy-outerRadius);
+  for(let i=0;i<spikes;i++){
+    x = cx + Math.cos(rot) * outerRadius; y = cy + Math.sin(rot) * outerRadius; ctx.lineTo(x,y); rot += step;
+    x = cx + Math.cos(rot) * innerRadius; y = cy + Math.sin(rot) * innerRadius; ctx.lineTo(x,y); rot += step;
+  }
+  ctx.lineTo(cx, cy-outerRadius); ctx.closePath(); ctx.fillStyle='#ffd166'; ctx.fill(); ctx.strokeStyle='rgba(0,0,0,0.15)'; ctx.stroke();
+}
+
+// --- อัปเดตแต่ละเฟรม ---
+let last = performance.now();
+function update(){
+  if(state!=='running') { draw(); requestAnimationFrame(update); return; }
+  const now = performance.now();
+  const dt = (now-last)/16.666; last = now;
+  const cw = canvas.width/devicePixelRatio, ch = canvas.height/devicePixelRatio;
+
+  // spawn
+  spawnTimer++;
+  if(spawnTimer>=spawnRate){ spawnTimer=0; spawnItem(); if(spawnRate>28) spawnRate -= 0.6; }
+
+  // move items
+  items.forEach(it=>{ it.y += it.vy * dt; });
+
+  // move bullets
+  bullets.forEach(b=>{ b.y -= 6 * dt; });
+
+  // check collisions: player catches
+  for(let i=items.length-1;i>=0;i--){
+    const it=items[i];
+    if(rectColl({x:player.x,y:player.y,w:player.w,h:player.h}, it)){
+      if(it.type==='star'){ score += 10 + level*2; player.carry++; }
+      else { lives--; }
+      items.splice(i,1);
+    } else if(it.y > ch + 60) { items.splice(i,1); }
+  }
+
+  // bullets hit items
+  for(let bI=bullets.length-1;bI>=0;bI--){
+    const b = bullets[bI];
+    if(b.y < -20){ bullets.splice(bI,1); continue; }
+    for(let j=items.length-1;j>=0;j--){
+      if(rectColl(b, items[j])){
+        if(items[j].type==='star'){ score += 5; }
+        else { score += 20; }
+        items.splice(j,1); bullets.splice(bI,1); break;
+      }
+    }
+  }
+
+  // level up
+  if(score >= level * 200){ level++; }
+
+  // lose condition
+  if(lives <= 0){ state='over'; document.getElementById('lives').textContent = 0; }
+
+  // update DOM stats
+  document.getElementById('score').textContent = score;
+  document.getElementById('lives').textContent = lives;
+  document.getElementById('level').textContent = level;
+
+  // draw and next frame
+  draw(); requestAnimationFrame(update);
+}
+requestAnimationFrame(update);
+
+// --- ควบคุมผู้เล่น ---
+let keys = {};
+window.addEventListener('keydown', e=>{ keys[e.key]=true; if(e.key===' '){ // space -> fire
+  if(player.carry>0){ bullets.push({x:player.x+player.w/2-6, y:player.y-12, w:12, h:20}); player.carry--; }
+  e.preventDefault(); }
+});
+window.addEventListener('keyup', e=>{ keys[e.key]=false });
+
+function gameLoopControls(){
+  if(keys['ArrowLeft'] || keys['a']) player.x -= player.speed;
+  if(keys['ArrowRight'] || keys['d']) player.x += player.speed;
+  // clamp
+  const maxX = (canvas.width/devicePixelRatio)-player.w-6; const minX=6;
+  if(player.x < minX) player.x = minX; if(player.x > maxX) player.x = maxX;
+  setTimeout(gameLoopControls, 16);
+}
+gameLoopControls();
+
+// mouse/touch drag
+let dragging=false;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; moveToPointer(e); });
+canvas.addEventListener('pointermove', e=>{ if(dragging) moveToPointer(e); });
+window.addEventListener('pointerup', e=>{ dragging=false; });
+function moveToPointer(e){
+  const r = canvas.getBoundingClientRect();
+  const x = (e.clientX - r.left);
+  player.x = x - player.w/2;
+}
+
+// --- ปุ่ม UI ---
+document.getElementById('startBtn').addEventListener('click', ()=>{
+  if(state==='running') return; state='running'; last = performance.now(); if(score===0 && lives===0) resetGame();
+});
+let paused=false; document.getElementById('pauseBtn').addEventListener('click', ()=>{
+  if(state==='running'){ state='paused'; paused=true; } else if(state==='paused'){ state='running'; paused=false; last = performance.now(); }
+});
+document.getElementById('resetBtn').addEventListener('click', ()=>{ resetGame(); state='menu'; draw(); });
+
+// เริ่มต้น
+state='menu'; draw();
+
+// --- ฟังค์ชั่นเพิ่มเติม: อัตโนมัติเรียกเมื่อเริ่มเกม ---
+(function engineTick(){
+  // ปรับความเร็วของ player เล็กน้อยตามเลเวล
+  player.speed = 6 + Math.min(6, level*0.35);
+  // วนลูปเอง
+  requestAnimationFrame(engineTick);
+})();
+
+</script>
+</body>
+</html>
